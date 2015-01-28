@@ -1,0 +1,159 @@
+Sheet
+
+Option Explicit
+
+'Declare Global Variables for Column Header Row, Description and Type columns
+Public DescriptionColumn As Range
+Public Header            As Range
+Public TypeColumn        As Range
+
+Public Sub Add_Hyperlinks()
+    
+    Dim EPM As FPMXLClient.EPMAddInAutomation
+    Set EPM = New EPMAddInAutomation
+   
+    Dim TopLeft         As String, _
+    BottomRight         As String, _
+    LastRow             As Integer, _
+    LastCol             As Integer, _
+    OffsetCol           As Integer, _
+    HeaderStart         As String, _
+    HeaderEnd           As String, _
+    HeaderOffset        As Integer, _
+    iCell               As Range, _
+    DescriptionStart    As String, _
+    DescriptionEnd      As String, _
+    TypeStart           As String, _
+    TypeEnd             As String, _
+    FoundFlag           As Integer, _
+    TempCell            As String
+
+    'Find the location of the column headers and report body
+    'N.B. "Header" is a Global Variable
+
+    TopLeft = EPM.GetDataTopLeftCell(ActiveSheet, "000")
+    BottomRight = EPM.GetDataBottomRightCell(ActiveSheet, "000")
+    LastRow = Range(BottomRight).Row
+    LastCol = Range(BottomRight).Column
+    HeaderOffset = -EPM.GetShift(ActiveSheet, "000", False)
+    HeaderStart = Range(TopLeft).Offset(HeaderOffset).Address
+    HeaderEnd = Cells(Range(HeaderStart).Row, LastCol).Address
+    Set Header = Range(HeaderStart, HeaderEnd)
+
+    'Loop through column header to see where AFE, Description and Type columns are
+    FoundFlag = 0
+    For Each iCell In Header
+    'N.B. "Header", "DescriptionColumn" and "TypeColumn" are Global Variables
+        If iCell.Value = "Description" Then
+            DescriptionStart = iCell.Address
+            DescriptionEnd = Cells(LastRow, iCell.Column).Address
+            Set DescriptionColumn = Range(DescriptionStart, DescriptionEnd)
+            FoundFlag = FoundFlag + 1
+        ElseIf iCell.Value = "Type" Then
+            TypeStart = iCell.Address
+            TypeEnd = Cells(LastRow, iCell.Column).Address
+            Set TypeColumn = Range(TypeStart, TypeEnd)
+            FoundFlag = FoundFlag + 1
+        End If
+       
+       'Checks whether all have been found
+        If FoundFlag = 3 Then
+            Exit For
+        End If
+        
+    Next iCell
+    FoundFlag = 0
+    Set iCell = Nothing
+   
+    'Loop through Type column. For each 'AFE' type found, put a hyperlink in the corresponding Description column.
+    For Each iCell In TypeColumn
+   
+        If iCell.Value = "AFE" Then
+       
+            'Constructs hyperlink
+            TempCell = Cells(iCell.Row, DescriptionColumn.Column).Address
+            Hyperlinks.Add _
+            Anchor:=Range(TempCell), _
+            Address:="", _
+            SubAddress:="'" & ActiveSheet.Name & "'!" & TempCell, _
+            ScreenTip:="Jump to Appropriation Request " & Range(TempCell).Value
+           
+        End If
+       
+    Next iCell
+    Set iCell = Nothing
+
+End Sub
+ 
+'Event handler for clicking a hyperlink. Used to call GUI and pass Appropriation Request to ECC
+Private Sub Worksheet_FollowHyperlink(ByVal Target As Hyperlink)
+   
+    'If the global variables haven't been set yet, run the Add_Hyperlinks sub above.
+    If DescriptionColumn Is Nothing Then
+        Add_Hyperlinks
+        Stop
+    End If
+ 
+    'Checks to see whether the hyperlink was called from the description column.
+    'Exits if hyperlink came from anywhere else.
+    If Intersect(Target.Range, DescriptionColumn) Is Nothing Then
+        Exit Sub
+    Else
+        'Breakpoint for testing
+ 
+On Error GoTo EPMFail:
+        'Initialises EPM API and grabs active connection
+        Dim EPM As FPMXLClient.EPMAddInAutomation
+        Set EPM = New EPMAddInAutomation
+ 
+On Error GoTo Errhandler:
+       
+        'Grabs active connection. Used to determine which ECC system to link to
+        Dim Connection As String
+        Connection = EPM.GetActiveConnection(ActiveSheet)
+       
+        'Grabs Appropriation Request from F column (AFE) for same row as clicked link. Done in case description is not ID.
+        'Hyperlink must be clicked from Description, as we don't want to interfere with double-clicking functionality on the ID column.
+        'May be improved in future by making the ID column dynamic.
+        Dim AppropriationRequest As String
+        AppropriationRequest = Range("$F$" & Target.Range.Row).Value
+        
+        'Parses connection string to get server details
+        Dim BPC_Environment As String
+        BPC_Environment = Mid(Connection, 22, 34)
+         
+        
+        Dim ECC_Environment
+        'Looks up system from server. Used to determine which ECC system to link to.
+        Select Case BPC_Environment:
+            Case "mogruepd03.mog.maerskoil.com:8020"
+                ECC_Environment = "OPZ"
+            Case "srueappnv05.mog.maerskoil.com:8026"
+                ECC_Environment = "ORZ"
+            Case "srueappnv02.mog.maerskoil.com:8024"
+                ECC_Environment = "OQZ"
+            Case "sfrmappnv03.mog.maerskoil.com:8022"
+                ECC_Environment = "ODZ"
+            Case "srueappnv02.mog.maerskoil.com:8018"
+                ECC_Environment = "OSZ"
+            Case Else
+                MsgBox "System could not be determined. Check EPM Connection"
+        End Select
+              
+   
+        'Call Shell command to open SAP GUI on corresponding ECC system, transaction IMA3N for selected Appropriation Request
+        Dim i As Double
+        i = Shell("""C:\Program Files (x86)\SAP\FrontEnd\SAPgui\SAPgui.exe"" /SHORTCUT=""-sid=" & ECC_Environment & " -clt=010 -type=SystemCommand -cmd=""/n*IMA3N IMAK-POSNR=" & AppropriationRequest & ";""")
+       
+    End If
+Exit Sub
+ 
+'Error Handlers
+EPMFail:
+    MsgBox "You must have an active connection to BPC for this functionality to work"
+    Exit Sub
+Errhandler:
+    MsgBox "An unexpected error has occured"
+    Exit Sub
+       
+End Sub
